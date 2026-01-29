@@ -1,0 +1,82 @@
+{
+  "process": [
+    {
+      "type": "startEvent",
+      "id": "start",
+      "label": "Loan application received via online system"
+    },
+    {
+      "type": "userTask",
+      "id": "task_check_credit_history",
+      "label": "Check applicant's credit history"
+    },
+    {
+      "type": "parallelGateway",
+      "id": "parallel_assess_risk_and_appraise_property",
+      "branches": [
+        [
+          {
+            "type": "serviceTask",
+            "id": "task_assess_loan_risk",
+            "label": "Assess loan risk (automated)"
+          }
+        ],
+        [
+          {
+            "type": "userTask",
+            "id": "task_appraise_property",
+            "label": "Appraise property"
+          }
+        ]
+      ]
+    },
+    {
+      "type": "userTask",
+      "id": "task_assess_applicant_eligibility",
+      "label": "Assess applicant's eligibility"
+    },
+    {
+      "type": "exclusiveGateway",
+      "id": "gateway_eligibility_decision",
+      "label": "Is applicant eligible?",
+      "has_join": false,
+      "branches": [
+        {
+          "condition": "Applicant is not eligible",
+          "path": [
+            {
+              "type": "userTask",
+              "id": "task_reject_application",
+              "label": "Reject application"
+            },
+            {
+              "type": "endEvent",
+              "id": "end_rejected",
+              "label": "Application rejected"
+            }
+          ]
+        },
+        {
+          "condition": "Applicant is eligible",
+          "path": [
+            {
+              "type": "userTask",
+              "id": "task_prepare_acceptance_pack",
+              "label": "Prepare acceptance pack"
+            },
+            {
+              "type": "userTask",
+              "id": "task_send_acceptance_pack",
+              "label": "Send acceptance pack to applicant"
+            },
+            {
+              "type": "endEvent",
+              "id": "end_accepted",
+              "label": "Acceptance pack sent to applicant"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
