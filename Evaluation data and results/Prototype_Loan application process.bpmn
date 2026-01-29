@@ -1,0 +1,168 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" xmlns:dc="http://www.omg.org/spec/DD/20100524/DC" xmlns:di="http://www.omg.org/spec/DD/20100524/DI" id="definitions_1" targetNamespace="http://bpmn.io/schema/bpmn">
+  <bpmn:process id="Process_1" isExecutable="false">
+    <bpmn:startEvent id="start" name="Loan application received via online system">
+      <bpmn:outgoing>start-task_check_credit_history</bpmn:outgoing>
+    </bpmn:startEvent>
+    <bpmn:userTask id="task_check_credit_history" name="Check applicant&#39;s credit history">
+      <bpmn:incoming>start-task_check_credit_history</bpmn:incoming>
+      <bpmn:outgoing>task_check_credit_history-parallel_assess_risk_and_appraise_property</bpmn:outgoing>
+    </bpmn:userTask>
+    <bpmn:parallelGateway id="parallel_assess_risk_and_appraise_property">
+      <bpmn:incoming>task_check_credit_history-parallel_assess_risk_and_appraise_property</bpmn:incoming>
+      <bpmn:outgoing>parallel_assess_risk_and_appraise_property-task_assess_loan_risk</bpmn:outgoing>
+      <bpmn:outgoing>parallel_assess_risk_and_appraise_property-task_appraise_property</bpmn:outgoing>
+    </bpmn:parallelGateway>
+    <bpmn:parallelGateway id="parallel_assess_risk_and_appraise_property-join">
+      <bpmn:incoming>task_assess_loan_risk-parallel_assess_risk_and_appraise_property-join</bpmn:incoming>
+      <bpmn:incoming>task_appraise_property-parallel_assess_risk_and_appraise_property-join</bpmn:incoming>
+      <bpmn:outgoing>parallel_assess_risk_and_appraise_property-join-task_assess_applicant_eligibility</bpmn:outgoing>
+    </bpmn:parallelGateway>
+    <bpmn:serviceTask id="task_assess_loan_risk" name="Assess loan risk (automated)">
+      <bpmn:incoming>parallel_assess_risk_and_appraise_property-task_assess_loan_risk</bpmn:incoming>
+      <bpmn:outgoing>task_assess_loan_risk-parallel_assess_risk_and_appraise_property-join</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:userTask id="task_appraise_property" name="Appraise property">
+      <bpmn:incoming>parallel_assess_risk_and_appraise_property-task_appraise_property</bpmn:incoming>
+      <bpmn:outgoing>task_appraise_property-parallel_assess_risk_and_appraise_property-join</bpmn:outgoing>
+    </bpmn:userTask>
+    <bpmn:userTask id="task_assess_applicant_eligibility" name="Assess applicant&#39;s eligibility">
+      <bpmn:incoming>parallel_assess_risk_and_appraise_property-join-task_assess_applicant_eligibility</bpmn:incoming>
+      <bpmn:outgoing>task_assess_applicant_eligibility-gateway_eligibility_decision</bpmn:outgoing>
+    </bpmn:userTask>
+    <bpmn:exclusiveGateway id="gateway_eligibility_decision" name="Is applicant eligible?">
+      <bpmn:incoming>task_assess_applicant_eligibility-gateway_eligibility_decision</bpmn:incoming>
+      <bpmn:outgoing>gateway_eligibility_decision-task_reject_application</bpmn:outgoing>
+      <bpmn:outgoing>gateway_eligibility_decision-task_prepare_acceptance_pack</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+    <bpmn:userTask id="task_reject_application" name="Reject application">
+      <bpmn:incoming>gateway_eligibility_decision-task_reject_application</bpmn:incoming>
+      <bpmn:outgoing>task_reject_application-end_rejected</bpmn:outgoing>
+    </bpmn:userTask>
+    <bpmn:endEvent id="end_rejected" name="Application rejected">
+      <bpmn:incoming>task_reject_application-end_rejected</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:userTask id="task_prepare_acceptance_pack" name="Prepare acceptance pack">
+      <bpmn:incoming>gateway_eligibility_decision-task_prepare_acceptance_pack</bpmn:incoming>
+      <bpmn:outgoing>task_prepare_acceptance_pack-task_send_acceptance_pack</bpmn:outgoing>
+    </bpmn:userTask>
+    <bpmn:userTask id="task_send_acceptance_pack" name="Send acceptance pack to applicant">
+      <bpmn:incoming>task_prepare_acceptance_pack-task_send_acceptance_pack</bpmn:incoming>
+      <bpmn:outgoing>task_send_acceptance_pack-end_accepted</bpmn:outgoing>
+    </bpmn:userTask>
+    <bpmn:endEvent id="end_accepted" name="Acceptance pack sent to applicant">
+      <bpmn:incoming>task_send_acceptance_pack-end_accepted</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:sequenceFlow id="start-task_check_credit_history" sourceRef="start" targetRef="task_check_credit_history" />
+    <bpmn:sequenceFlow id="task_check_credit_history-parallel_assess_risk_and_appraise_property" sourceRef="task_check_credit_history" targetRef="parallel_assess_risk_and_appraise_property" />
+    <bpmn:sequenceFlow id="task_assess_loan_risk-parallel_assess_risk_and_appraise_property-join" sourceRef="task_assess_loan_risk" targetRef="parallel_assess_risk_and_appraise_property-join" />
+    <bpmn:sequenceFlow id="parallel_assess_risk_and_appraise_property-task_assess_loan_risk" sourceRef="parallel_assess_risk_and_appraise_property" targetRef="task_assess_loan_risk" />
+    <bpmn:sequenceFlow id="task_appraise_property-parallel_assess_risk_and_appraise_property-join" sourceRef="task_appraise_property" targetRef="parallel_assess_risk_and_appraise_property-join" />
+    <bpmn:sequenceFlow id="parallel_assess_risk_and_appraise_property-task_appraise_property" sourceRef="parallel_assess_risk_and_appraise_property" targetRef="task_appraise_property" />
+    <bpmn:sequenceFlow id="parallel_assess_risk_and_appraise_property-join-task_assess_applicant_eligibility" sourceRef="parallel_assess_risk_and_appraise_property-join" targetRef="task_assess_applicant_eligibility" />
+    <bpmn:sequenceFlow id="task_assess_applicant_eligibility-gateway_eligibility_decision" sourceRef="task_assess_applicant_eligibility" targetRef="gateway_eligibility_decision" />
+    <bpmn:sequenceFlow id="task_reject_application-end_rejected" sourceRef="task_reject_application" targetRef="end_rejected" />
+    <bpmn:sequenceFlow id="gateway_eligibility_decision-task_reject_application" name="Applicant is not eligible" sourceRef="gateway_eligibility_decision" targetRef="task_reject_application" />
+    <bpmn:sequenceFlow id="task_prepare_acceptance_pack-task_send_acceptance_pack" sourceRef="task_prepare_acceptance_pack" targetRef="task_send_acceptance_pack" />
+    <bpmn:sequenceFlow id="task_send_acceptance_pack-end_accepted" sourceRef="task_send_acceptance_pack" targetRef="end_accepted" />
+    <bpmn:sequenceFlow id="gateway_eligibility_decision-task_prepare_acceptance_pack" name="Applicant is eligible" sourceRef="gateway_eligibility_decision" targetRef="task_prepare_acceptance_pack" />
+  </bpmn:process>
+  <bpmndi:BPMNDiagram id="BPMNDiagram_Process_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_Process_1" bpmnElement="Process_1">
+      <bpmndi:BPMNShape id="start_di" bpmnElement="start">
+        <dc:Bounds x="57" y="52" width="36" height="36" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="task_check_credit_history_di" bpmnElement="task_check_credit_history">
+        <dc:Bounds x="175" y="30" width="100" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="parallel_assess_risk_and_appraise_property_di" bpmnElement="parallel_assess_risk_and_appraise_property">
+        <dc:Bounds x="350" y="45" width="50" height="50" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="task_assess_loan_risk_di" bpmnElement="task_assess_loan_risk">
+        <dc:Bounds x="475" y="30" width="100" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="parallel_assess_risk_and_appraise_property-join_di" bpmnElement="parallel_assess_risk_and_appraise_property-join">
+        <dc:Bounds x="650" y="45" width="50" height="50" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="task_assess_applicant_eligibility_di" bpmnElement="task_assess_applicant_eligibility">
+        <dc:Bounds x="775" y="30" width="100" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="gateway_eligibility_decision_di" bpmnElement="gateway_eligibility_decision" isMarkerVisible="true">
+        <dc:Bounds x="950" y="45" width="50" height="50" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="task_reject_application_di" bpmnElement="task_reject_application">
+        <dc:Bounds x="1075" y="30" width="100" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="end_rejected_di" bpmnElement="end_rejected">
+        <dc:Bounds x="1257" y="52" width="36" height="36" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="task_appraise_property_di" bpmnElement="task_appraise_property">
+        <dc:Bounds x="475" y="170" width="100" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="task_prepare_acceptance_pack_di" bpmnElement="task_prepare_acceptance_pack">
+        <dc:Bounds x="1075" y="170" width="100" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="task_send_acceptance_pack_di" bpmnElement="task_send_acceptance_pack">
+        <dc:Bounds x="1225" y="170" width="100" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="end_accepted_di" bpmnElement="end_accepted">
+        <dc:Bounds x="1407" y="192" width="36" height="36" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="start-task_check_credit_history_di" bpmnElement="start-task_check_credit_history">
+        <di:waypoint x="93" y="70" />
+        <di:waypoint x="175" y="70" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="task_check_credit_history-parallel_assess_risk_and_appraise_property_di" bpmnElement="task_check_credit_history-parallel_assess_risk_and_appraise_property">
+        <di:waypoint x="275" y="70" />
+        <di:waypoint x="350" y="70" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="parallel_assess_risk_and_appraise_property-task_assess_loan_risk_di" bpmnElement="parallel_assess_risk_and_appraise_property-task_assess_loan_risk">
+        <di:waypoint x="400" y="70" />
+        <di:waypoint x="475" y="70" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="parallel_assess_risk_and_appraise_property-task_appraise_property_di" bpmnElement="parallel_assess_risk_and_appraise_property-task_appraise_property">
+        <di:waypoint x="375" y="95" />
+        <di:waypoint x="375" y="210" />
+        <di:waypoint x="475" y="210" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="task_assess_loan_risk-parallel_assess_risk_and_appraise_property-join_di" bpmnElement="task_assess_loan_risk-parallel_assess_risk_and_appraise_property-join">
+        <di:waypoint x="575" y="70" />
+        <di:waypoint x="650" y="70" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="parallel_assess_risk_and_appraise_property-join-task_assess_applicant_eligibility_di" bpmnElement="parallel_assess_risk_and_appraise_property-join-task_assess_applicant_eligibility">
+        <di:waypoint x="700" y="70" />
+        <di:waypoint x="775" y="70" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="task_assess_applicant_eligibility-gateway_eligibility_decision_di" bpmnElement="task_assess_applicant_eligibility-gateway_eligibility_decision">
+        <di:waypoint x="875" y="70" />
+        <di:waypoint x="950" y="70" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="gateway_eligibility_decision-task_reject_application_di" bpmnElement="gateway_eligibility_decision-task_reject_application">
+        <di:waypoint x="1000" y="70" />
+        <di:waypoint x="1075" y="70" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="gateway_eligibility_decision-task_prepare_acceptance_pack_di" bpmnElement="gateway_eligibility_decision-task_prepare_acceptance_pack">
+        <di:waypoint x="975" y="95" />
+        <di:waypoint x="975" y="210" />
+        <di:waypoint x="1075" y="210" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="task_reject_application-end_rejected_di" bpmnElement="task_reject_application-end_rejected">
+        <di:waypoint x="1175" y="70" />
+        <di:waypoint x="1257" y="70" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="task_appraise_property-parallel_assess_risk_and_appraise_property-join_di" bpmnElement="task_appraise_property-parallel_assess_risk_and_appraise_property-join">
+        <di:waypoint x="575" y="210" />
+        <di:waypoint x="675" y="210" />
+        <di:waypoint x="675" y="95" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="task_prepare_acceptance_pack-task_send_acceptance_pack_di" bpmnElement="task_prepare_acceptance_pack-task_send_acceptance_pack">
+        <di:waypoint x="1175" y="210" />
+        <di:waypoint x="1225" y="210" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="task_send_acceptance_pack-end_accepted_di" bpmnElement="task_send_acceptance_pack-end_accepted">
+        <di:waypoint x="1325" y="210" />
+        <di:waypoint x="1407" y="210" />
+      </bpmndi:BPMNEdge>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</bpmn:definitions>
