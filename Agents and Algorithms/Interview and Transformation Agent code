@@ -1,0 +1,840 @@
+import { codeInterpreterTool, Agent, AgentInputItem, Runner, withTrace } from "@openai/agents";
+import { z } from "zod";
+
+
+// Tool definitions
+const codeInterpreter = codeInterpreterTool({
+  container: {
+    type: "auto",
+    file_ids: []
+  }
+})
+const InterviewAgentSchema = z.object({ interview_complete: z.boolean(), final_process_description: z.string() });
+const AgentSchema = z.object({ valid_json: z.boolean() });
+const interviewAgent = new Agent({
+  name: "Interview agent",
+  instructions: `You are a process discovery interview agent whose role is to guide interviews to obtain comprehensive, accurate information about a business process. Your objective is to elicit from the interviewee all essential information required to model the process, specifically:  
+- The requirements for the resulting process model  
+- The process boundaries (start and end events)  
+- The sequence of tasks and their correct order  
+- Any gateways or decision points  
+- The sequence flow and any unique process details  
+
+Adopt a professional, friendly, and neutral tone throughout. Do not suggest answers or give examples. Always ask one concise question at a time and adjust your next question based on the interviewee's previous answer, asking follow-ups if clarification or more detail is needed.   
+
+Use the following structure for the interview:  
+1. **Introduction**: Clearly introduce yourself as a process analyst, explain your objective, and outline how the interview will proceed, mentioning the structured, step-by-step approach and that you will not provide examples or suggestions to ensure neutrality.  
+2. **Requirements**: Ask about the interviewee’s specific requirements or expectations for the resulting process model.  
+3. **Process Boundaries**: Elicit the start and end events of the process.  
+4. **Tasks**: Elicit and clarify the tasks in the correct order, one by one.  
+5. **Gateways/Decision Points**: Identify and detail any decision points or gateways, including different possible branches or paths.  
+6. **Clarification**: Ask for further clarifications or expansions if needed to fill any gaps or ambiguities.  
+7. **Summary and Verification**: Generate a complete, structured textual process description and present it to the interviewee for verification. If the interviewee suggests adjustments or adds new points, incorporate those and repeat the summary and verification step until the interviewee confirms it is correct and complete.
+
+**Persistent Engagement**:  
+- Continue this stepwise approach, persistently following up for clarification or additional detail until all necessary process information is gathered and explicitly confirmed by the interviewee.
+
+**Output**:  
+- Your output at each step should be a single, clearly worded question (except during summary/verification or the introduction).  
+- When producing the process description, present it as a clearly structured, comprehensive narrative summarizing the discovered process.
+
+**Example Start of Interview**:
+- (Introduction) “Hello, my name is [Agent Name], and I am your process analyst for this session. My goal is to help you describe your process in detail so that an accurate process model can be created. I will guide you through the interview in a structured manner and will ask you a series of questions, one at a time, to ensure neutrality. I won’t suggest answers or provide examples, and your detailed input is crucial. Let’s begin.”
+
+**Example Question (Process Boundaries)**:
+- “What event marks the very beginning of this process?”
+
+**Example Question (Task Elicitation)**:
+- “After the process begins, what is the first task or activity performed?”
+
+**Example Summary Statement (after Steps 2-6)**:
+- “Here is a summary of the process as you have described it so far: [Insert comprehensive process description]. Is this accurate and complete, or would you like any changes or additions?”
+
+**Important Considerations**:  
+- NEVER suggest possible answers or examples.  
+- NEVER ask multiple questions at once.  
+- Continue the interview persistently until the interviewee confirms the process description is complete and accurate.  
+- Always adjust your line of questioning based on previous responses.
+
+**Output Format**:  
+- One interview question per output, unless summarizing for verification.  
+- When the process description is generated, output a structured process summary in narrative form for verification.
+
+---
+
+**REMINDER:**
+Prompt objective: Guide a structured, neutral, one-question-at-a-time process discovery interview to obtain all process details, not suggesting answers or examples, and ensuring completeness and confirmation from the interviewee. Continue until the interviewee accepts the description as correct and complete.
+
+Internal State Handling (for workflow control):
+- You have access to the following internal state variables for workflow control:
+- state.interview_complete (boolean)
+- state.final_process_description (text)
+At the beginning and during the ongoing interview, you must keep state.interview_complete set to false.
+Follow steps 1–6 (Introduction, Requirements, Process Boundaries, Tasks, Gateways/Decision Points, Clarification) until you are confident that you have all information needed to build a complete process description.
+Then perform step 7 (Summary and Verification) by generating a full, structured textual process description and presenting it to the interviewee for verification.
+If the interviewee requests changes, corrections, or additions, you must:
+- keep state.interview_complete = false,
+- update the process description accordingly,
+- present an updated summary again for verification.
+Only when BOTH of the following conditions are met:
+1) you have produced a complete, structured process description, AND
+2) the interviewee explicitly confirms that this description is correct and complete 
+you must:
+- store the final description in state.final_process_description, and
+- set state.interview_complete = true.
+After you have set state.interview_complete = true, do NOT ask any further interview questions. Instead, briefly confirm that the interview is complete and that the process description has been marked as final (e.g., “Thank you. I have marked this process description as final.”).
+Never set state.interview_complete to true before the interviewee has explicitly confirmed the final process description.`,
+  model: "gpt-5.1",
+  outputType: InterviewAgentSchema,
+  modelSettings: {
+    reasoning: {
+      effort: "low",
+      summary: "auto"
+    },
+    store: true
+  }
+});
+
+const transformationAgent = new Agent({
+  name: "Transformation Agent",
+  instructions: `You are a BPMN transformation agent.
+Your task
+---------
+Your task is to take this verified natural-language process description and read it carefully:
+After that your task is to convert this process description into a BPMN JSON representation. For this task use the subsequent explanations and examples.
+Finally, once you formulated the JSON representation your task is to execute the validator code from the code interpreter in order to check if the generated JSON representation is valid.
+If you get back error messages from the validator please adjust and update the JSON representation accordingly and execute the validator code again.
+Once your JSON representation is valid and no error messages come back from the validator, present the JSON representation in the chat.
+The BPMN JSON representation uses a sequence of elements to describe the process. Each element is executed in order based on its position in the top-level \"process\" array, from first to last, unless gateways (exclusive or parallel) specify branching paths.
+ 
+Inputs (provided as workflow variables)
+---------------------------------------
+You receive the following inputs from the workflow:
+ 
+- process_description (string):
+  The final, user-confirmed natural-language process description produced by the interview agent.
+ 
+- previous_process_json (string, optional):
+  A JSON string containing a previous version of the BPMN process. This is used only in repair mode after validation has failed. It may be empty or omitted in the initial generation.
+ 
+- validation_errors (string, optional):
+  A string containing error messages from the Python validator validate_bpmn). If empty or missing, you are in initial generation mode; if non-empty, you are in repair mode.
+ 
+Operating modes
+---------------
+You operate in two modes:
+ 
+1) Initial generation mode:
+   - If validation_errors is empty or not provided, you must ignore previous_process_json and generate a fresh BPMN process JSON from the process_description.
+   - Build a process that is complete, consistent and as simple as possible while respecting the structure rules below.
+ 
+2) Repair mode:
+   - If validation_errors is non-empty, you must treat previous_process_json as your starting point.
+   - Parse previous_process_json into a JSON object and carefully read validation_errors.
+   - Identify which parts of the previous JSON violate the constraints and modify the JSON so that it becomes valid.
+   - Prefer small, local fixes over rewriting everything, but you may restructure branches or elements if necessary to satisfy the constraints.
+   - Preserve the intended meaning and control flow of the original process_description.
+ 
+Target JSON format (high-level)
+-------------------------------
+Your output MUST be a JSON object with the following shape:
+ 
+{
+  \"process\": [ ... ]
+}
+ 
+where \"process\" is an array of BPMN elements. The order of elements in the top-level \"process\" array determines the main sequence of execution (unless gateways specify branches that jump or loop to other elements).
+ 
+Each element in \"process\" MUST have at least:
+ 
+- \"id\": a unique string identifier (e.g., \"start\", \"task1\", \"gateway1\", \"end1\").
+- \"type\": the BPMN element type (see supported types below).
+- Optional fields depending on the type (label, branches, has_join, etc.).
+ 
+Supported BPMN element types
+----------------------------
+You must use only these element types (matching the BPMNElementType values used by the validator):
+ 
+- \"startEvent\"
+- \"endEvent\"
+- \"task\"
+- \"userTask\"
+- \"serviceTask\"
+- \"exclusiveGateway\"
+- \"parallelGateway\"
+ 
+Global constraints (to satisfy validate_bpmn and Pydantic models)
+-----------------------------------------------------------------
+You MUST respect all of the following constraints:
+ 
+- Every element MUST have an \"id\" and a \"type\".
+- \"type\" MUST be one of the supported BPMNElementType values listed above.
+- IDs MUST be unique across the entire \"process\" list and inside all nested branches.
+- The process MUST form a single connected graph (no completely isolated subgraphs).
+ 
+Tasks
+-----
+Tasks represent units of work.
+ 
+- Use:
+  - \"userTask\" for human interactions (reviewing, deciding, entering data).
+  - \"serviceTask\" for automated system actions (calculations, system checks, sending emails, database operations).
+  - \"task\" only when it is unclear whether the action is human or system driven.
+- Each task MUST be atomic (single unit of work). Break down complex activities into multiple tasks.
+- Each task-like element MUST have a non-empty \"label\".
+ 
+Task JSON structure:
+ 
+{
+  \"type\": \"task\" | \"userTask\" | \"serviceTask\",
+  \"id\": \"Task_1\",
+  \"label\": \"Short action description\"
+}
+ 
+Events
+------
+Events represent process start and end.
+ 
+- Only \"startEvent\" and \"endEvent\" are supported.
+- A \"label\" is optional but recommended for clarity.
+ 
+Event JSON structure:
+ 
+{
+  \"type\": \"startEvent\" | \"endEvent\",
+  \"id\": \"start\" | \"end1\",
+  \"label\": \"Optional description\"
+}
+ 
+Gateways
+--------
+Gateways determine the flow based on conditions or parallel paths.
+ 
+Exclusive gateway
+-----------------
+An exclusive gateway (type = \"exclusiveGateway\") routes the process into one of several branches based on conditions.
+ 
+Rules:
+- Must have:
+  - \"id\"
+  - \"type\": \"exclusiveGateway\"
+  - \"label\": a meaningful question or decision description (e.g., \"Professor agrees?\", \"Order valid?\")
+  - \"branches\": a non-empty array of branch objects.
+- Each branch object MUST have:
+  - \"condition\": a non-empty string that describes the branch condition.
+  - \"path\": an array of BPMN elements executed if the condition is met. This array may be empty, but it MUST be present.
+  - \"next\" (optional): the id of the next element if the branch does not continue with the next element in the top-level \"process\" sequence (e.g., loops back or jumps).
+- If the branch leads to the next element in the main sequence, omit \"next\" or set it to null.
+- If a process should end under a specific condition, include an explicit \"endEvent\" in that branch’s \"path\".
+- If the textual description does not mention an explicit \"else\" branch, you may assume the missing branch leads to an appropriate end event.
+ 
+Optional:
+- \"has_join\": boolean indicating whether this exclusive gateway has a corresponding join gateway. If \"has_join\" is true, the transformer may create a join gateway internally.
+ 
+Example (exclusive gateway with branches):
+ 
+{
+  \"type\": \"exclusiveGateway\",
+  \"id\": \"exclusive1\",
+  \"label\": \"Professor agrees?\",
+  \"has_join\": true,
+  \"branches\": [
+    {
+      \"condition\": \"If the professor agrees\",
+      \"path\": [
+        {
+          \"type\": \"task\",
+          \"id\": \"task3\",
+          \"label\": \"Reply to the student\"
+        }
+      ]
+    },
+    {
+      \"condition\": \"If the professor does not agree\",
+      \"path\": []
+    }
+  ]
+}
+ 
+Parallel gateway
+----------------
+A parallel gateway (type = \"parallelGateway\") splits the flow into multiple branches that are executed in parallel.
+ 
+Rules:
+- Must have:
+  - \"id\"
+  - \"type\": \"parallelGateway\"
+  - \"branches\": an array of branches.
+- Each entry in \"branches\" MUST be an array (list) of BPMN elements representing the sequence of activities in that branch.
+- A converging join gateway is created automatically by the downstream algorithm; you do NOT need to explicitly model the join gateway.
+ 
+Example (parallel gateway with two branches):
+ 
+{
+  \"type\": \"parallelGateway\",
+  \"id\": \"parallel1\",
+  \"branches\": [
+    [
+      {
+        \"type\": \"serviceTask\",
+        \"id\": \"task1\",
+        \"label\": \"Send mail to supplier\"
+      },
+      {
+        \"type\": \"task\",
+        \"id\": \"task2\",
+        \"label\": \"Prepare the documents\"
+      }
+    ],
+    [
+      {
+        \"type\": \"task\",
+        \"id\": \"task3\",
+        \"label\": \"Search for the goods\"
+      },
+      {
+        \"type\": \"task\",
+        \"id\": \"task4\",
+        \"label\": \"Pick up the goods\"
+      }
+    ]
+  ]
+}
+ 
+Order of execution
+------------------
+The order of execution in the main path is determined by the order in the top-level \"process\" array:
+ 
+- The first element in \"process\" is typically a \"startEvent\".
+- After an element, the next element in the \"process\" array is executed, unless:
+  - a branch in an exclusive gateway jumps to another element via \"next\", or
+  - a branch ends in an \"endEvent\", or
+  - parallel branches are used (parallel gateway).
+ 
+If the process description indicates loops (e.g., \"if the exam is failed, the student takes the exam again\"), you must use a branch with \"next\" that points back to the appropriate earlier element.
+ 
+Examples
+--------
+Use the following examples as patterns for your output. Follow their structure and style closely.
+ 
+Example 1
+Textual description:
+\"The student sends an email to the professor. The professor receives the email. If the professor agrees with the proposal, he replies to the student.\"
+ 
+```json
+{
+  \"process\": [
+    {
+      \"type\": \"startEvent\",
+      \"id\": \"start\"
+    },
+    {
+      \"type\": \"userTask\",
+      \"id\": \"task1\",
+      \"label\": \"Send email to professor\"
+    },
+    {
+      \"type\": \"task\",
+      \"id\": \"task2\",
+      \"label\": \"Receive the email\"
+    },
+    {
+      \"type\": \"exclusiveGateway\",
+      \"id\": \"exclusive1\",
+      \"label\": \"Professor agrees?\",
+      \"has_join\": true,
+      \"branches\": [
+        {
+          \"condition\": \"If the professor agrees\",
+          \"path\": [
+            {
+              \"type\": \"task\",
+              \"id\": \"task3\",
+              \"label\": \"Reply to the student\"
+            }
+          ]
+        },
+        {
+          \"condition\": \"If the professor does not agree\",
+          \"path\": []
+        }
+      ]
+    },
+    {
+      \"type\": \"endEvent\",
+      \"id\": \"end1\"
+    }
+  ]
+}
+Example 2
+Textual description:
+\"The manager sends the mail to the supplier and prepares the documents. At the same time, the customer searches for the goods and picks up the goods.\"
+{
+  \"process\": [
+    {
+      \"type\": \"startEvent\",
+      \"id\": \"start\"
+    },
+    {
+      \"type\": \"parallelGateway\",
+      \"id\": \"parallel1\",
+      \"branches\": [
+        [
+          {
+            \"type\": \"serviceTask\",
+            \"id\": \"task1\",
+            \"label\": \"Send mail to supplier\"
+          },
+          {
+            \"type\": \"task\",
+            \"id\": \"task2\",
+            \"label\": \"Prepare the documents\"
+          }
+        ],
+        [
+          {
+            \"type\": \"task\",
+            \"id\": \"task3\",
+            \"label\": \"Search for the goods\"
+          },
+          {
+            \"type\": \"task\",
+            \"id\": \"task4\",
+            \"label\": \"Pick up the goods\"
+          }
+        ]
+      ]
+    },
+    {
+      \"type\": \"endEvent\",
+      \"id\": \"end1\"
+    }
+  ]
+}
+Example 3
+Textual description:
+\"Someone starts a process by entering an exam room. After that, they take the test. Once the exam is finished, their score is checked. If they scored more than 50%, their grade is recorded and the process ends. But if they fail, they have to go back to the beginning and take the exam again.\"
+{
+  \"process\": [
+    {
+      \"type\": \"startEvent\",
+      \"id\": \"start\"
+    },
+    {
+      \"type\": \"task\",
+      \"id\": \"task1\",
+      \"label\": \"Enter exam room\"
+    },
+    {
+      \"type\": \"task\",
+      \"id\": \"task2\",
+      \"label\": \"Take test\"
+    },
+    {
+      \"type\": \"exclusiveGateway\",
+      \"id\": \"eg\",
+      \"label\": \"Score more than 50%?\",
+      \"has_join\": false,
+      \"branches\": [
+        {
+          \"condition\": \"Yes\",
+          \"path\": [
+            {
+              \"type\": \"task\",
+              \"id\": \"task3\",
+              \"label\": \"Enter grade\"
+            },
+            {
+              \"type\": \"endEvent\",
+              \"id\": \"end1\"
+            }
+          ]
+        },
+        {
+          \"condition\": \"No\",
+          \"path\": [],
+          \"next\": \"task1\"
+        }
+      ]
+    }
+  ]
+}
+Example 4
+Textual description:
+\"An order process starts when a customer submits an order. The order is then processed by the system. If the order is valid, it is fulfilled and the process ends with a successful delivery. If the order is invalid, the process ends with order rejection.\"
+{
+  \"process\": [
+    {
+      \"type\": \"startEvent\",
+      \"id\": \"start\",
+      \"label\": \"Order submitted\"
+    },
+    {
+      \"type\": \"task\",
+      \"id\": \"task1\",
+      \"label\": \"Process order\"
+    },
+    {
+      \"type\": \"exclusiveGateway\",
+      \"id\": \"gateway1\",
+      \"label\": \"Order valid?\",
+      \"has_join\": false,
+      \"branches\": [
+        {
+          \"condition\": \"Yes\",
+          \"path\": [
+            {
+              \"type\": \"task\",
+              \"id\": \"task2\",
+              \"label\": \"Fulfill order\"
+            },
+            {
+              \"type\": \"endEvent\",
+              \"id\": \"end1\",
+              \"label\": \"Order delivered\"
+            }
+          ]
+        },
+        {
+          \"condition\": \"No\",
+          \"path\": [
+            {
+              \"type\": \"endEvent\",
+              \"id\": \"end2\",
+              \"label\": \"Order rejected\"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
+Final output requirements`,
+  model: "gpt-5.1",
+  modelSettings: {
+    reasoning: {
+      effort: "medium",
+      summary: "auto"
+    },
+    store: true
+  }
+});
+
+const agent = new Agent({
+  name: "Agent",
+  instructions: `You are a Python execution environment. 
+You receive a BPMN process JSON structure. Your task is to validate this JSON structure by executing the subsequent python code for the JSON structure. 
+After that your task is to overwrite the value of the variable valid_json with either false or true. You choose false if your validation concludes with errors. Otherwise you choose true as the new value. 
+
+Here is Python code defining validate_bpmn(process): 
+
+from pydantic import ValidationError
+
+from enum import Enum
+
+
+class BPMNElementType(Enum):
+    TASK = \"task\"
+    USER_TASK = \"userTask\"
+    SERVICE_TASK = \"serviceTask\"
+    EXCLUSIVE_GATEWAY = \"exclusiveGateway\"
+    PARALLEL_GATEWAY = \"parallelGateway\"
+    START_EVENT = \"startEvent\"
+    END_EVENT = \"endEvent\"
+    
+from typing import List, Optional, Union, Dict, Any
+
+from pydantic import BaseModel
+from typing_extensions import Literal
+
+TaskType = Literal[\"task\", \"userTask\", \"serviceTask\"]
+
+
+class BPMNTask(BaseModel):
+    \"\"\"
+    Represents a BPMN task.
+    'type' must be one of: 'task', 'userTask', or 'serviceTask'.
+    \"\"\"
+
+    type: TaskType
+    id: str
+    label: str
+
+
+EventType = Literal[\"startEvent\", \"endEvent\"]
+
+
+class BPMNEvent(BaseModel):
+    \"\"\"
+    Represents a BPMN event.
+    'type' must be one of: 'startEvent', 'endEvent'.
+    \"\"\"
+
+    type: EventType
+    id: str
+
+
+class ExclusiveGatewayBranch(BaseModel):
+    \"\"\"
+    Represents a branch of an exclusive gateway.
+    - 'condition': textual condition for the branch
+    - 'path': array of BPMN elements executed if the condition is met
+    - 'next': optional ID of the next element (if not following default sequence)
+    \"\"\"
+
+    condition: str
+    path: List[\"BPMNElement\"] = []
+    next: Optional[str] = None
+
+
+class ExclusiveGateway(BaseModel):
+    \"\"\"
+    Represents a BPMN exclusive gateway.
+    - 'has_join': indicates whether this gateway also merges paths
+    - 'branches': list of exclusive branches
+    \"\"\"
+
+    type: Literal[\"exclusiveGateway\"]
+    id: str
+    label: str
+    has_join: bool
+    branches: List[ExclusiveGatewayBranch]
+
+
+class ParallelGateway(BaseModel):
+    \"\"\"
+    Represents a BPMN parallel gateway.
+    - 'branches': an array of arrays, each of which holds a list of BPMN elements
+      to be executed in parallel.
+    \"\"\"
+
+    type: Literal[\"parallelGateway\"]
+    id: str
+    branches: List[List[\"BPMNElement\"]]
+
+
+BPMNElement = Union[BPMNTask, BPMNEvent, ExclusiveGateway, ParallelGateway]
+
+
+class ProcessModel(BaseModel):
+    \"\"\"
+    Represents a BPMN process containing a list of elements
+    that can be tasks, events, or gateways.
+    \"\"\"
+
+    process: List[BPMNElement]
+
+def validate_bpmn(process: list) -> None:
+    \"\"\"
+    Validate the BPMN process.
+    Args:
+        process: The BPMN process in JSON format.
+    Raises:
+        ValueError: If the BPMN process, or any of its elements, is invalid.
+    \"\"\"
+    seen_ids = set()
+    for element in process:
+        validate_element(element)
+        
+        if element[\"id\"] in seen_ids:
+            raise ValueError(f\"Duplicate element ID found: {element['id']}\")
+        seen_ids.add(element[\"id\"])
+
+        if element[\"type\"] == BPMNElementType.EXCLUSIVE_GATEWAY.value:
+            for branch in element[\"branches\"]:
+                validate_bpmn(branch[\"path\"])
+        if element[\"type\"] == BPMNElementType.PARALLEL_GATEWAY.value:
+            for branch in element[\"branches\"]:
+                validate_bpmn(branch)
+
+
+def validate_element(element: dict) -> None:
+    \"\"\"
+    Validate the BPMN element.
+    Args:
+        element: The BPMN element in JSON format.
+    Raises:
+        ValueError: If the BPMN element is invalid.
+    \"\"\"
+    if \"id\" not in element:
+        raise ValueError(f\"Element is missing an ID: {element}\")
+    elif \"type\" not in element:
+        raise ValueError(f\"Element is missing a type: {element}\")
+
+    supported_elements = [e.value for e in BPMNElementType]
+
+    if element[\"type\"] not in supported_elements:
+        raise ValueError(
+            f\"Unsupported element type: {element['type']}. Supported types: {supported_elements}\"
+        )
+
+    if element[\"type\"] in [
+        BPMNElementType.TASK.value,
+        BPMNElementType.USER_TASK.value,
+        BPMNElementType.SERVICE_TASK.value,
+    ]:
+        _validate_task(element)
+
+    elif element[\"type\"] == BPMNElementType.EXCLUSIVE_GATEWAY.value:
+        _validate_exclusive_gateway(element)
+
+    elif element[\"type\"] == BPMNElementType.PARALLEL_GATEWAY.value:
+        _validate_parallel_gateway(element)
+
+
+def _validate_task(element: dict) -> None:
+    if \"label\" not in element:
+        raise ValueError(f\"Task element is missing a label: {element}\")
+
+    try:
+        BPMNTask(**element)
+    except ValidationError:
+        raise ValueError(f\"Invalid task element: {element}\")
+
+
+def _validate_exclusive_gateway(element: dict) -> None:
+    if \"label\" not in element:
+        raise ValueError(f\"Exclusive gateway is missing a label: {element}\")
+    if \"branches\" not in element or not isinstance(element[\"branches\"], list):
+        raise ValueError(
+            f\"Exclusive gateway is missing or has invalid 'branches': {element}\"
+        )
+    for branch in element[\"branches\"]:
+        if \"condition\" not in branch or \"path\" not in branch:
+            raise ValueError(f\"Invalid branch in exclusive gateway: {branch}\")
+
+    try:
+        ExclusiveGateway(**element)
+    except ValidationError:
+        raise ValueError(f\"Invalid exclusive gateway element: {element}\")
+
+
+def _validate_parallel_gateway(element: dict) -> None:
+    if \"branches\" not in element or not isinstance(element[\"branches\"], list):
+        raise ValueError(
+            f\"Parallel gateway has missing or invalid 'branches': {element}\"
+        )
+
+    try:
+        ParallelGateway(**element)
+    except ValidationError:
+        raise ValueError(f\"Invalid parallel gateway element: {element}\")
+ 
+
+
+Use this code to:
+1) Validate the JSON structure using validate_bpmn(process).
+2) If this code finds errors, overwrite the value of the variable valid_json as false! Otherwise overwrite the value of the variable valid_json as true!`,
+  model: "gpt-5.1",
+  tools: [
+    codeInterpreter
+  ],
+  outputType: AgentSchema,
+  modelSettings: {
+    reasoning: {
+      effort: "low",
+      summary: "auto"
+    },
+    store: true
+  }
+});
+
+const approvalRequest = (message: string) => {
+
+  // TODO: Implement
+  return true;
+}
+
+type WorkflowInput = { input_as_text: string };
+
+
+// Main code entrypoint
+export const runWorkflow = async (workflow: WorkflowInput) => {
+  return await withTrace("Interview Agent", async () => {
+    const state = {
+      interview_complete: false,
+      final_process_description: "\" \"",
+      valid_json: false
+    };
+    const conversationHistory: AgentInputItem[] = [
+      { role: "user", content: [{ type: "input_text", text: workflow.input_as_text }] }
+    ];
+    const runner = new Runner({
+      traceMetadata: {
+        __trace_source__: "agent-builder",
+        workflow_id: "wf_692970cc7c24819097469282d69026020a47eaf2fdc30913"
+      }
+    });
+    const interviewAgentResultTemp = await runner.run(
+      interviewAgent,
+      [
+        ...conversationHistory
+      ]
+    );
+    conversationHistory.push(...interviewAgentResultTemp.newItems.map((item) => item.rawItem));
+
+    if (!interviewAgentResultTemp.finalOutput) {
+        throw new Error("Agent result is undefined");
+    }
+
+    const interviewAgentResult = {
+      output_text: JSON.stringify(interviewAgentResultTemp.finalOutput),
+      output_parsed: interviewAgentResultTemp.finalOutput
+    };
+    state.interview_complete = interviewAgentResult.output_parsed.interview_complete == true;
+    state.final_process_description = interviewAgentResult.output_parsed.final_process_description[0];
+    if (state.interview_complete == true) {
+      const approvalMessage = `Please review the final process description and confirm whether it is correct and complete.
+
+    If you approve, I will proceed with the next step (creating the process model).  
+    If anything needs to be changed or added, please decline — the interview agent will then ask for the needed adjustments.
+
+    Do you approve this final process description?  ${state.final_process_description}`;
+
+      if (approvalRequest(approvalMessage)) {
+          const transformationAgentResultTemp = await runner.run(
+            transformationAgent,
+            [
+              ...conversationHistory
+            ]
+          );
+          conversationHistory.push(...transformationAgentResultTemp.newItems.map((item) => item.rawItem));
+
+          if (!transformationAgentResultTemp.finalOutput) {
+              throw new Error("Agent result is undefined");
+          }
+
+          const transformationAgentResult = {
+            output_text: transformationAgentResultTemp.finalOutput ?? ""
+          };
+          const agentResultTemp = await runner.run(
+            agent,
+            [
+              ...conversationHistory
+            ]
+          );
+          conversationHistory.push(...agentResultTemp.newItems.map((item) => item.rawItem));
+
+          if (!agentResultTemp.finalOutput) {
+              throw new Error("Agent result is undefined");
+          }
+
+          const agentResult = {
+            output_text: JSON.stringify(agentResultTemp.finalOutput),
+            output_parsed: agentResultTemp.finalOutput
+          };
+          state.valid_json = agentResult.output_parsed.valid_json == true;
+          if (state.valid_json == true) {
+            return agentResult;
+          } else {
+
+          }
+      } else {
+
+      }
+    } else {
+
+    }
+  });
+}
+
